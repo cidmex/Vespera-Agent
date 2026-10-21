@@ -1,0 +1,9 @@
+[package]
+name = "vespera-proto"
+description = "Wire protocol shared by the Vespera server and agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1.3"

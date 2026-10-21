@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: bash -n scripts/install.sh
+
+  musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - run: pip install ziglang==0.13.0 cargo-zigbuild
+      - run: cargo zigbuild --release --target x86_64-unknown-linux-musl
+      - name: Binary is static and small
+        run: |
+          f=target/x86_64-unknown-linux-musl/release/vespera-agent
+          file "$f"
+          ls -l "$f"
+          "$f" --version
+
+  proto-sync:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Protocol crate matches cidmex/Vespera@main
+        run: bash scripts/sync-proto.sh --check

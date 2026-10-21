@@ -1,0 +1,97 @@
+name: Release
+
+# Push a tag equal to the Cargo.toml version, e.g. `git tag v0.1.0-beta.1 && git push --tags`.
+# Tags with a pre-release suffix (-beta.N, -rc.N, ...) are published as GitHub pre-releases;
+# install.sh picks them up because it lists /releases rather than /releases/latest.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p}' Cargo.toml | head -n1)
+          [ -n "$VERSION" ] || { echo "::error::could not read version from Cargo.toml"; exit 1; }
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [ "${GITHUB_REF#refs/tags/v}" != "$VERSION" ]; then
+            echo "::error::tag ${GITHUB_REF#refs/tags/} does not match Cargo.toml version $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, arch: amd64 }
+          - { target: aarch64-unknown-linux-musl, arch: arm64 }
+          - { target: armv7-unknown-linux-musleabihf, arch: armv7 }
+          - { target: i686-unknown-linux-musl, arch: "386" }
+          - { target: riscv64gc-unknown-linux-musl, arch: riscv64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install zig and cargo-zigbuild
+        run: pip install ziglang==0.13.0 cargo-zigbuild
+      - name: Build
+        env:
+          VESPERA_GIT_SHA: ${{ github.sha }}
+        run: |
+          export VESPERA_GIT_SHA="${VESPERA_GIT_SHA::7}"
+          cargo zigbuild --release --target ${{ matrix.target }}
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/vespera-agent dist/vespera-agent-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vespera-agent-linux-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp scripts/install.sh dist/install.sh
+          cd dist && sha256sum vespera-agent-linux-* install.sh > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          generate_release_notes: true
+          files: dist/*
+          body: |
+            Install or upgrade on a Linux server (the panel's **Install agent** dialog generates this for you):
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/cidmex/Vespera-Agent/main/scripts/install.sh | sudo bash -s -- --version v${{ needs.version.outputs.version }} -e <panel-url> -t <token>
+            ```
