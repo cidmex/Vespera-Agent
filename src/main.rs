@@ -6,6 +6,7 @@ mod conn;
 mod net;
 mod ping;
 mod ssh;
+mod update;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -25,6 +26,7 @@ pub const VERSION: &str = env!("VESPERA_AGENT_VERSION");
 const IP_REFRESH: Duration = Duration::from_secs(1800);
 
 fn main() -> Result<()> {
+    update::init();
     let cfg = Config::parse();
     let level = cfg.log.parse().unwrap_or(tracing::Level::INFO);
     tracing_subscriber::fmt().with_max_level(level).with_target(false).init();
@@ -72,7 +74,9 @@ async fn run(mut cfg: Config) -> Result<()> {
     let (fail_tx, fail_rx) = mpsc::channel(64);
     let ssh = if cfg.disable_ssh { None } else { ssh::spawn(&cfg.ssh_source, &cfg.state_dir, fail_tx) };
 
-    let agent = conn::Agent { cfg, collector, ips, tasks_tx, ping_rx, ssh, fail_rx };
+    let (upgrade_tx, upgrade_rx) = mpsc::channel(4);
+    let agent =
+        conn::Agent { cfg, collector, ips, tasks_tx, ping_rx, ssh, fail_rx, upgrade_tx, upgrade_rx, upgrading: false };
     tokio::select! {
         _ = agent.run() => {}
         _ = shutdown_signal() => tracing::info!("shutting down"),

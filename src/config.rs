@@ -42,6 +42,10 @@ pub struct Config {
     #[arg(long, env = "VESPERA_DISABLE_SSH")]
     pub disable_ssh: bool,
 
+    /// Refuse self-update orders from the panel
+    #[arg(long, env = "VESPERA_DISABLE_AUTO_UPDATE")]
+    pub disable_auto_update: bool,
+
     /// Directory for persistent agent state (SSH queue, log cursors)
     #[arg(long, env = "VESPERA_STATE_DIR", default_value = "/var/lib/vespera-agent")]
     pub state_dir: PathBuf,

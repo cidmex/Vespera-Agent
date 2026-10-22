@@ -18,13 +18,15 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::{self, Message};
 use vespera_proto::{
-    AgentMsg, BasicInfo, ErrorCode, Hello, PROTO_VERSION, PingResult, PingTask, ServerMsg, SshFailSummary,
+    AgentMsg, BasicInfo, ErrorCode, FEATURE_UPGRADE, Hello, PROTO_VERSION, PingResult, PingTask, ServerMsg,
+    SshFailSummary, UpgradeOrder, UpgradeResult,
 };
 
 use crate::collect::Collector;
 use crate::config::Config;
 use crate::net::{self, http, tls};
 use crate::ssh::SshShared;
+use crate::update;
 
 const HEARTBEAT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(35);
@@ -39,6 +41,10 @@ pub struct Agent {
     pub ping_rx: mpsc::Receiver<PingResult>,
     pub ssh: Option<Arc<SshShared>>,
     pub fail_rx: mpsc::Receiver<SshFailSummary>,
+    /// Finished self-update attempts: (version, result).
+    pub upgrade_tx: mpsc::Sender<(String, Result<(), String>)>,
+    pub upgrade_rx: mpsc::Receiver<(String, Result<(), String>)>,
+    pub upgrading: bool,
 }
 
 enum End {
@@ -168,6 +174,24 @@ impl Agent {
                     ssh_sent = 0;
                     self.flush_ssh(&mut ws, &mut ssh_sent).await?;
                 }
+                Some((version, result)) = self.upgrade_rx.recv() => {
+                    self.upgrading = false;
+                    match result {
+                        Ok(()) => {
+                            tracing::info!(%version, "update installed, restarting");
+                            let r = UpgradeResult { version, ok: true, message: "installed, restarting".into() };
+                            send(&mut ws, &AgentMsg::UpgradeResult(r)).await?;
+                            let _ = ws.close(None).await;
+                            let err = update::restart();
+                            tracing::error!("{err}");
+                            return Ok(End::Retry(err));
+                        }
+                        Err(message) => {
+                            tracing::warn!(%version, "update failed: {message}");
+                            send(&mut ws, &AgentMsg::UpgradeResult(UpgradeResult { version, ok: false, message })).await?;
+                        }
+                    }
+                }
                 _ = heartbeat.tick() => {
                     if last_rx.elapsed() > READ_TIMEOUT {
                         return Ok(End::Retry("read timeout".into()));
@@ -189,7 +213,16 @@ impl Agent {
                                 }
                             }
                             Ok(ServerMsg::Error { code, msg }) => return Ok(error_end(code, msg)),
+                            Ok(ServerMsg::Features(_)) => {
+                                let mut ours = Vec::new();
+                                if !self.cfg.disable_auto_update {
+                                    ours.push(FEATURE_UPGRADE.to_string());
+                                }
+                                send(&mut ws, &AgentMsg::Features(ours)).await?;
+                            }
+                            Ok(ServerMsg::Upgrade(order)) => self.start_upgrade(order, &mut ws).await?,
                             Ok(ServerMsg::Welcome(_)) => {}
+                            // Frames from a newer panel that this agent does not know yet.
                             Err(e) => tracing::debug!("undecodable frame: {e}"),
                         },
                         Message::Close(_) => return Ok(End::Retry("closed by panel".into())),
@@ -198,6 +231,28 @@ impl Agent {
                 }
             }
         }
+    }
+
+    async fn start_upgrade(&mut self, order: UpgradeOrder, ws: &mut Ws) -> Result<()> {
+        let reply = |ok: bool, message: &str| {
+            AgentMsg::UpgradeResult(UpgradeResult { version: order.version.clone(), ok, message: message.into() })
+        };
+        if self.cfg.disable_auto_update {
+            return send(ws, &reply(false, "auto-update is disabled on this agent")).await;
+        }
+        if order.version == crate::VERSION {
+            return send(ws, &reply(true, "already running this version")).await;
+        }
+        if self.upgrading {
+            return Ok(());
+        }
+        self.upgrading = true;
+        let tx = self.upgrade_tx.clone();
+        tokio::spawn(async move {
+            let result = update::apply(&order).await;
+            let _ = tx.send((order.version, result)).await;
+        });
+        Ok(())
     }
 
     async fn flush_ssh(&mut self, ws: &mut Ws, sent: &mut u64) -> Result<()> {

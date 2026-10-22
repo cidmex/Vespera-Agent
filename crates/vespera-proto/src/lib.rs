@@ -4,10 +4,15 @@
 //! WebSocket messages on `/api/agent/ws`. The agent authenticates with an
 //! `Authorization: Bearer <token>` header on the upgrade request.
 //!
-//! Compatibility rules:
-//! - Only ever *append* fields to a struct, and mark new fields `#[serde(default)]`,
-//!   so older peers can still decode newer frames.
-//! - Only ever append enum variants.
+//! Compatibility rules (structs are encoded as fixed-length arrays, and a
+//! decoder rejects arrays with *more* elements than it knows about):
+//! - Never change an existing struct. Not even appending a field is safe: an
+//!   older peer would fail to decode the longer array.
+//! - New data travels in new enum variants (encoded by name). Receivers ignore
+//!   frames they cannot decode instead of dropping the connection.
+//! - Only send a new variant after the peer announced support for it via
+//!   [`ServerMsg::Features`] / [`AgentMsg::Features`] (see the `FEATURE_*`
+//!   constants). Feature lists are plain strings, so they extend freely.
 //! - Anything else is a breaking change and must bump [`PROTO_VERSION`].
 //!
 //! This crate is the source of truth in the `Vespera` repository; the agent
@@ -21,6 +26,11 @@ pub const PROTO_VERSION: u16 = 1;
 /// Path of the agent WebSocket endpoint on the server.
 pub const AGENT_WS_PATH: &str = "/api/agent/ws";
 
+/// Self-update: server may send [`ServerMsg::Upgrade`], agent answers with
+/// [`AgentMsg::UpgradeResult`]. An agent started with auto-update disabled
+/// does not announce it.
+pub const FEATURE_UPGRADE: &str = "upgrade";
+
 // ---------------------------------------------------------------------------
 // Agent -> Server
 // ---------------------------------------------------------------------------
@@ -33,6 +43,10 @@ pub enum AgentMsg {
     PingResults(Vec<PingResult>),
     SshEvents(Vec<SshEvent>),
     SshFailSummary(SshFailSummary),
+    /// Features the agent supports, sent in reply to [`ServerMsg::Features`].
+    Features(Vec<String>),
+    /// Outcome of an [`ServerMsg::Upgrade`] order.
+    UpgradeResult(UpgradeResult),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,8 +148,35 @@ pub struct SshFailSummary {
 pub enum ServerMsg {
     Welcome(Welcome),
     PingTasks(Vec<PingTask>),
-    SshAck { up_to_seq: u64 },
-    Error { code: ErrorCode, msg: String },
+    SshAck {
+        up_to_seq: u64,
+    },
+    Error {
+        code: ErrorCode,
+        msg: String,
+    },
+    /// Features the server supports, sent right after [`ServerMsg::Welcome`].
+    Features(Vec<String>),
+    /// Ask the agent to replace itself with another release.
+    Upgrade(UpgradeOrder),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpgradeOrder {
+    /// Release version without the leading `v`, e.g. `0.1.0-beta.2`.
+    pub version: String,
+    /// Download directory; the agent appends its asset name, e.g.
+    /// `https://github.com/cidmex/Vespera-Agent/releases/download/v0.1.0-beta.2`.
+    pub base_url: String,
+    /// `(asset name, sha256 hex)` for every published binary.
+    pub checksums: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpgradeResult {
+    pub version: String,
+    pub ok: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +301,51 @@ mod tests {
             ..Default::default()
         }));
         assert!(buf.len() < 120, "report frame is {} bytes", buf.len());
+    }
+
+    #[test]
+    fn roundtrip_new_variants() {
+        let m = ServerMsg::Upgrade(UpgradeOrder {
+            version: "0.1.0-beta.2".into(),
+            base_url: "https://example.com/d".into(),
+            checksums: vec![("vespera-agent-linux-amd64".into(), "ab".repeat(32))],
+        });
+        let back: ServerMsg = decode(&encode(&m)).unwrap();
+        assert_eq!(format!("{m:?}"), format!("{back:?}"));
+        let a = AgentMsg::UpgradeResult(UpgradeResult { version: "x".into(), ok: false, message: "m".into() });
+        let back: AgentMsg = decode(&encode(&a)).unwrap();
+        assert_eq!(format!("{a:?}"), format!("{back:?}"));
+    }
+
+    /// Documents why structs are frozen and new data uses new variants.
+    #[test]
+    fn compatibility_rules() {
+        #[derive(Serialize, Deserialize, Debug)]
+        enum OldServerMsg {
+            Welcome(OldWelcome),
+            SshAck { up_to_seq: u64 },
+        }
+        #[derive(Serialize, Deserialize, Debug)]
+        struct OldWelcome {
+            node_uuid: String,
+            server_time: i64,
+            ssh_acked_seq: u64,
+        }
+        #[derive(Serialize, Deserialize)]
+        struct GrownWelcome {
+            node_uuid: String,
+            server_time: i64,
+            ssh_acked_seq: u64,
+            extra: u8,
+        }
+
+        // A new variant is an error the old peer can recognise and skip...
+        assert!(decode::<OldServerMsg>(&encode(&ServerMsg::Features(vec![FEATURE_UPGRADE.into()]))).is_err());
+        // ...while frames it knows still decode.
+        assert!(decode::<OldServerMsg>(&encode(&ServerMsg::SshAck { up_to_seq: 3 })).is_ok());
+        // Appending a field to an existing struct breaks older decoders.
+        let grown = GrownWelcome { node_uuid: "u".into(), server_time: 1, ssh_acked_seq: 2, extra: 0 };
+        assert!(decode::<OldWelcome>(&encode(&grown)).is_err());
     }
 
     #[test]

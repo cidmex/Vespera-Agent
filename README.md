@@ -6,7 +6,7 @@
 - 直接读取 `/proc`，复用文件句柄和缓冲区，采集过程中几乎不分配内存；运行时为单线程 tokio。
 - 支持的架构：`amd64`、`arm64`、`armv7`、`386`、`riscv64`。
 
-> 当前为 **beta** 版本（`0.1.0-beta.1`）。
+> 当前为 **beta** 版本（`0.1.0-beta.2`）。
 
 ## 安装
 
@@ -42,6 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/cidmex/Vespera-Agent/main/scripts/i
 | `--mount-include` | `VESPERA_MOUNT_INCLUDE` | — | 只统计这些挂载点的磁盘 |
 | `--ssh-source` | `VESPERA_SSH_SOURCE` | `auto` | SSH 日志来源：`auto`、`journald` 或 `file:/var/log/auth.log` |
 | `--disable-ssh` | `VESPERA_DISABLE_SSH` | — | 关闭 SSH 监控 |
+| `--disable-auto-update` | `VESPERA_DISABLE_AUTO_UPDATE` | — | 拒绝面板推送的自动升级 |
 | `--state-dir` | `VESPERA_STATE_DIR` | `/var/lib/vespera-agent` | SSH 队列和日志游标的存放目录 |
 | `--ipv4` / `--ipv6` | `VESPERA_IPV4/6` | 自动 | 手动指定上报的 IP |
 | `--no-ip-lookup` | `VESPERA_NO_IP_LOOKUP` | — | 不探测公网 IP |
@@ -52,6 +53,19 @@ curl -fsSL https://raw.githubusercontent.com/cidmex/Vespera-Agent/main/scripts/i
 - **日志来源**：有 systemd 时，通过 `journalctl -f -o json` 跟随 `sshd`、`sshd-session` 和 `sshd-auth` 的日志，并记录游标，重启后从中断处继续。没有 systemd 时，跟随 `/var/log/auth.log`、`/var/log/secure` 或 `/var/log/messages`，能正确处理 logrotate 轮转和截断。
 - **登录成功**：会带上用户名、来源 IP 和端口、认证方式，公钥登录还会带上密钥指纹。事件先写入 `ssh-queue.jsonl`，面板确认收到后才删除，因此断线和重启都不会丢失。
 - **失败尝试**：每 60 秒汇总一次，上报失败次数和来源 IP 的 Top 10。
+
+## 自动更新
+
+面板发现新版本后，会把下载地址和全部 SHA256 下发给 Agent。Agent 的处理流程：
+
+1. 下载与自身架构对应的二进制，支持重定向和 chunked 传输。
+2. 校验 SHA256，并确认文件是 ELF 可执行文件。
+3. 原子替换 `/opt/vespera-agent/vespera-agent`。
+4. 用原来的参数 `exec` 重启自身。
+
+任何一步失败，Agent 都会把原因上报给面板，并显示在节点列表里。
+
+自我升级要求安装目录可写。beta.2 的 `install.sh` 已经在 systemd 服务里加了 `ReadWritePaths=/opt/vespera-agent`；用 beta.1 安装的机器需要重新运行一次安装命令。
 
 ## 采集口径
 

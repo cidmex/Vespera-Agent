@@ -3,7 +3,7 @@ resolver = "3"
 members = [".", "crates/vespera-proto"]
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2024"
 repository = "https://github.com/cidmex/Vespera-Agent"
 
@@ -31,6 +31,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 regex-lite = "0.1"
 fastrand = "2"
 libc = "0.2"
+sha2 = "0.10"
 mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]

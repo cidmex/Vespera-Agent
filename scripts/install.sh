@@ -8,6 +8,8 @@
 #   --version <tag>     install a specific release, e.g. v0.1.0-beta.1 (default: newest, including pre-releases)
 #   --mirror <prefix>   GitHub download proxy prefix, e.g. https://ghfast.top/
 #   --uninstall         stop and remove the agent
+#
+# Useful agent flags: --disable-ssh, --disable-auto-update, --interval <secs>
 set -euo pipefail
 
 REPO="cidmex/Vespera-Agent"
@@ -176,7 +178,8 @@ RestartSec=5
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=${STATE_DIR}
+# The install dir stays writable so the agent can update itself.
+ReadWritePaths=${STATE_DIR} ${INSTALL_DIR}
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
@@ -196,8 +199,8 @@ else
 name="${NAME}"
 description="Vespera monitoring agent"
 command="${INSTALL_DIR}/${NAME}"
-command_background=true
-pidfile="/run/${NAME}.pid"
+supervisor=supervise-daemon
+respawn_delay=5
 output_log="/var/log/${NAME}.log"
 error_log="/var/log/${NAME}.log"
 
