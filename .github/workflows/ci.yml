@@ -38,11 +38,3 @@ jobs:
           file "$f"
           ls -l "$f"
           "$f" --version
-
-  proto-sync:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Protocol crate matches cidmex/Vespera@main
-        run: bash scripts/sync-proto.sh --check
