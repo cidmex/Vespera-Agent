@@ -57,7 +57,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Install zig and cargo-zigbuild
-        run: pip install ziglang==0.13.0 cargo-zigbuild
+        run: pip install ziglang==0.17.0 cargo-zigbuild
       - name: Build
         env:
           VESPERA_GIT_SHA: ${{ github.sha }}
