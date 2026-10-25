@@ -31,6 +31,30 @@ curl -fsSL https://raw.githubusercontent.com/cidmex/Vespera-Agent/main/scripts/i
 
 其余参数会原样传给 Agent。
 
+### 卸载
+
+用安装脚本卸载，会停止并移除服务，删除程序、配置、状态和日志：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cidmex/Vespera-Agent/main/scripts/install.sh | sudo bash -s -- --uninstall
+```
+
+无法访问 GitHub 时，可以直接执行下面的命令，不需要下载任何东西。面板的“安装命令”弹窗里也有这两条命令。
+
+systemd：
+
+```bash
+sudo systemctl disable --now vespera-agent; sudo rm -f /etc/systemd/system/vespera-agent.service && sudo systemctl daemon-reload && sudo rm -rf /opt/vespera-agent /var/lib/vespera-agent /etc/vespera-agent.env
+```
+
+OpenRC：
+
+```bash
+sudo rc-service vespera-agent stop; sudo rc-update del vespera-agent default; sudo rm -f /etc/init.d/vespera-agent && sudo rm -rf /opt/vespera-agent /var/lib/vespera-agent /etc/vespera-agent.env /var/log/vespera-agent.log
+```
+
+systemd 下的日志由 journald 管理，会随 journald 自身的轮转策略自动清理。
+
 ## Agent 参数
 
 | 参数 | 环境变量 | 默认值 | 说明 |

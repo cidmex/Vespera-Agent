@@ -7,7 +7,7 @@
 # Installer options (everything else is passed to the agent):
 #   --version <tag>     install a specific release, e.g. v0.1.0-beta.1 (default: newest, including pre-releases)
 #   --mirror <prefix>   GitHub download proxy prefix, e.g. https://ghfast.top/
-#   --uninstall         stop and remove the agent
+#   --uninstall         stop and remove the agent (service, binary, config, state, logs)
 #
 # Useful agent flags: --disable-ssh, --disable-auto-update, --interval <secs>
 set -euo pipefail
@@ -79,7 +79,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     rc-update del "$NAME" default 2>/dev/null || true
     rm -f "$OPENRC_FILE"
   fi
-  rm -rf "$INSTALL_DIR" "$STATE_DIR" "$ENV_FILE"
+  rm -rf "$INSTALL_DIR" "$STATE_DIR" "$ENV_FILE" "/var/log/${NAME}.log"
   info "Done."
   exit 0
 fi
